@@ -28,6 +28,7 @@ class SupremeTimeline extends SupremeAnimation {
   final List<TimelineChild> _children = [];
   final Map<String, double> _labels = {};
   TimelineChild? _recentChild;
+  double _lastRenderedTime = 0.0;
 
   SupremeTimeline({
     this.defaults = const {},
@@ -196,9 +197,22 @@ class SupremeTimeline extends SupremeAnimation {
   Map<String, dynamic> _mergeWithDefaults(Map<String, dynamic> vars) {
     if (defaults.isEmpty) return Map<String, dynamic>.from(vars);
     final merged = Map<String, dynamic>.from(defaults);
+    // A default duration must not squash keyframe step durations; it is
+    // passed to the tween as the per-step fallback instead.
+    if (vars['keyframes'] is List) merged.remove('duration');
     merged.addAll(vars);
     return merged;
   }
+
+  double? _keyframeDefault(Map<String, dynamic> vars) =>
+      vars['keyframes'] is List && !vars.containsKey('duration')
+          ? (defaults['duration'] as num?)?.toDouble()
+          : null;
+
+  /// from/fromTo/set children render their from-values at creation only when
+  /// they sit at the start of the timeline (or `immediateRender` says so).
+  bool _immediateRenderFor(Map<String, dynamic> vars, double startTime) =>
+      (vars['immediateRender'] as bool?) ?? startTime <= 0.0;
 
   /// Adds a `to` tween to the timeline.
   SupremeTimeline to(dynamic target, Map<String, dynamic> vars,
@@ -209,24 +223,34 @@ class SupremeTimeline extends SupremeAnimation {
       type: TweenType.to,
       vars: merged,
       paused: true, // Controlled by timeline
+      keyframeDefaultDuration: _keyframeDefault(vars),
     );
     return add(tween, position);
   }
 
   /// Adds a `from` tween to the timeline.
+  ///
+  /// Its from-values are applied at creation only when it starts at time 0
+  /// of this timeline, unless `immediateRender` is set in [vars].
   SupremeTimeline from(dynamic target, Map<String, dynamic> vars,
       [dynamic position]) {
     final merged = _mergeWithDefaults(vars);
+    final startTime = parsePosition(position);
     final tween = SupremeTween(
       target: target,
       type: TweenType.from,
       vars: merged,
       paused: true,
+      immediateRender: _immediateRenderFor(vars, startTime),
+      keyframeDefaultDuration: _keyframeDefault(vars),
     );
-    return add(tween, position);
+    return add(tween, startTime);
   }
 
   /// Adds a `fromTo` tween to the timeline.
+  ///
+  /// Its from-values are applied at creation only when it starts at time 0
+  /// of this timeline, unless `immediateRender` is set in [toVars].
   SupremeTimeline fromTo(
     dynamic target,
     Map<String, dynamic> fromVars,
@@ -234,27 +258,35 @@ class SupremeTimeline extends SupremeAnimation {
     dynamic position,
   ]) {
     final merged = _mergeWithDefaults(toVars);
+    final startTime = parsePosition(position);
     final tween = SupremeTween(
       target: target,
       type: TweenType.fromTo,
       fromVars: fromVars,
       vars: merged,
       paused: true,
+      immediateRender: _immediateRenderFor(toVars, startTime),
+      keyframeDefaultDuration: _keyframeDefault(toVars),
     );
-    return add(tween, position);
+    return add(tween, startTime);
   }
 
   /// Adds a `set` immediate tween to the timeline.
+  ///
+  /// It is applied at creation only when it sits at time 0 of this timeline;
+  /// otherwise it is applied when the playhead reaches it.
   SupremeTimeline set(dynamic target, Map<String, dynamic> vars,
       [dynamic position]) {
+    final startTime = parsePosition(position);
     final tween = SupremeTween(
       target: target,
       type: TweenType.set,
       vars: vars,
       duration: 0.0,
       paused: true,
+      immediateRender: _immediateRenderFor(vars, startTime),
     );
-    return add(tween, position);
+    return add(tween, startTime);
   }
 
   /// Shifts all child start times by [amount].
@@ -306,7 +338,14 @@ class SupremeTimeline extends SupremeAnimation {
     final currentTimelineTime =
         durationVal.isFinite ? rawProgress * durationVal : time;
 
-    for (final c in _children) {
+    // When the playhead moves backwards, render children last-to-first so an
+    // earlier child has the final say over a later child that rewinds past
+    // its start on the same property.
+    final backwards = currentTimelineTime < _lastRenderedTime;
+    _lastRenderedTime = currentTimelineTime;
+    final ordered = backwards ? _children.reversed : _children;
+
+    for (final c in ordered) {
       final anim = c.animation;
       final childStart = c.startTime;
       final childEnd = c.endTime;

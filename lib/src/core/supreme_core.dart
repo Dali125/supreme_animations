@@ -226,6 +226,9 @@ class Supreme {
           delay: userDelay,
           ease: ease,
           paused: true,
+          // Paused groups wait to be played or placed in a timeline.
+          immediateRender:
+              (itemVars['immediateRender'] as bool?) ?? !groupPaused,
         );
         // Stagger offsets the timeline position. The tween delay stays the
         // caller's delay, otherwise every item waits twice as long.
@@ -308,6 +311,7 @@ class Supreme {
     }
 
     // Single target
+    final isPaused = paused ?? (vars['paused'] as bool?) ?? false;
     final tween = SupremeTween(
       target: target,
       type: type,
@@ -316,7 +320,12 @@ class Supreme {
       duration: duration,
       delay: delay,
       ease: ease,
-      paused: paused ?? (vars['paused'] as bool?) ?? false,
+      paused: isPaused,
+      // A paused from/fromTo does not show its from-values until it plays or
+      // is placed in a timeline. set() always applies at once.
+      immediateRender: type == TweenType.set
+          ? true
+          : ((vars['immediateRender'] as bool?) ?? !isPaused),
     );
 
     SupremeContextScope.current?.add(tween);

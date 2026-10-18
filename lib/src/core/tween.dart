@@ -17,8 +17,6 @@ class _PropertyTween {
   _PropertyTween({
     required this.key,
     required this.targetValueRaw,
-    this.startValue,
-    this.endValue,
     this.modifier,
   });
 
@@ -53,15 +51,30 @@ class _PropertyTween {
 
 /// Represents a single keyframe step within a keyframed tween.
 class KeyframeStep {
+  /// Share of the tween's duration this step animates for.
   final double durationFraction;
+
+  /// Share of the tween's duration the step waits (holding the previous
+  /// values) before it starts animating.
+  final double delayFraction;
   final Ease? ease;
   final Map<String, dynamic> props;
 
   KeyframeStep({
     required this.durationFraction,
+    this.delayFraction = 0.0,
     this.ease,
     required this.props,
   });
+}
+
+/// Absolute timing of a keyframe list, see [SupremeTween] for the rules.
+class _KeyframePlan {
+  final double total;
+  final List<double> durations;
+  final List<double> delays;
+
+  const _KeyframePlan(this.total, this.durations, this.delays);
 }
 
 class _KeyframeProp {
@@ -106,7 +119,30 @@ class SupremeTween extends SupremeAnimation {
   List<_KeyframeSpan>? _keyframeSpans;
   bool _initialized = false;
   Map<String, dynamic>? _batchedMap;
+  late final bool _immediateRender;
 
+  /// The default length of a tween when no `duration` is given.
+  static const double defaultDuration = 0.5;
+
+  /// Creates a tween.
+  ///
+  /// Start values of a `to` tween (and the end values of a `from` tween) are
+  /// recorded the first time the tween renders after its delay, not when it
+  /// is created, so tweens queued in a timeline pick up the values earlier
+  /// tweens leave behind. [invalidate] makes the tween record them again.
+  ///
+  /// [immediateRender] applies the from-values of a `from`, `fromTo` or `set`
+  /// tween as soon as it is created. It defaults to true here; the
+  /// `supreme.from/fromTo` helpers default it to `!paused`, and timelines
+  /// default it to true only for children placed at the timeline's start.
+  ///
+  /// Keyframe timing: when `keyframes` is given and no total `duration` is set
+  /// (here or in `vars`), the tween lasts the sum of the step durations plus
+  /// step delays. A step without a `duration` lasts [keyframeDefaultDuration]
+  /// (or [defaultDuration]) divided by the number of steps, so a list with no
+  /// step durations keeps the old total. With an explicit total, steps without
+  /// a duration share whatever the timed steps leave over; if nothing is left
+  /// over, every step and delay is scaled to fit the total.
   SupremeTween({
     required this.target,
     this.type = TweenType.to,
@@ -125,10 +161,11 @@ class SupremeTween extends SupremeAnimation {
     VoidCallback? onComplete,
     VoidCallback? onReverseComplete,
     VoidCallback? onRepeat,
+    bool? immediateRender,
+    double? keyframeDefaultDuration,
   }) : super(
-          duration: (type == TweenType.set)
-              ? 0.0
-              : (duration ?? (vars['duration'] as num?)?.toDouble() ?? 0.5),
+          duration:
+              _resolveDuration(type, duration, vars, keyframeDefaultDuration),
           delay: delay ?? (vars['delay'] as num?)?.toDouble() ?? 0.0,
           repeat: repeat ?? (vars['repeat'] as num?)?.toInt() ?? 0,
           repeatDelay:
@@ -166,8 +203,72 @@ class SupremeTween extends SupremeAnimation {
       });
     }
 
-    _setupKeyframes();
+    _immediateRender = type == TweenType.to
+        ? false
+        : (immediateRender ?? (vars['immediateRender'] as bool?) ?? true);
+
+    _setupKeyframes(
+      duration ?? (vars['duration'] as num?)?.toDouble(),
+      keyframeDefaultDuration ?? defaultDuration,
+    );
     _initProps();
+  }
+
+  static double _resolveDuration(TweenType type, double? duration,
+      Map<String, dynamic> vars, double? keyframeDefaultDuration) {
+    if (type == TweenType.set) return 0.0;
+    final explicit = duration ?? (vars['duration'] as num?)?.toDouble();
+    final kf = vars['keyframes'];
+    if (kf is List && kf.whereType<Map>().isNotEmpty) {
+      return _planKeyframes(
+              kf, explicit, keyframeDefaultDuration ?? defaultDuration)
+          .total;
+    }
+    return explicit ?? keyframeDefaultDuration ?? defaultDuration;
+  }
+
+  static double _nonNegative(dynamic v) {
+    final d = (v as num?)?.toDouble() ?? 0.0;
+    return d.isFinite && d > 0 ? d : 0.0;
+  }
+
+  static _KeyframePlan _planKeyframes(
+      List kfList, double? explicitTotal, double base) {
+    final steps = kfList.whereType<Map>().toList();
+    final n = steps.length;
+    final specified = [
+      for (final s in steps)
+        s['duration'] is num ? _nonNegative(s['duration']) : null,
+    ];
+    final delays = [for (final s in steps) _nonNegative(s['delay'])];
+    final delaySum = delays.fold(0.0, (a, b) => a + b);
+
+    if (explicitTotal == null) {
+      final perStep = n > 0 ? base / n : 0.0;
+      final durations = [for (final d in specified) d ?? perStep];
+      final total = durations.fold(0.0, (a, b) => a + b) + delaySum;
+      return _KeyframePlan(total, durations, delays);
+    }
+
+    final total = explicitTotal < 0 ? 0.0 : explicitTotal;
+    final timedSum = specified.fold(0.0, (a, d) => a + (d ?? 0.0)) + delaySum;
+    final untimed = specified.where((d) => d == null).length;
+    if (untimed > 0 && timedSum < total) {
+      final share = (total - timedSum) / untimed;
+      return _KeyframePlan(
+          total, [for (final d in specified) d ?? share], delays);
+    }
+    // Nothing left over: scale every step and delay to fit the total.
+    if (timedSum <= 0) {
+      return _KeyframePlan(
+          total, List.filled(n, n > 0 ? total / n : 0.0), List.filled(n, 0.0));
+    }
+    final k = total / timedSum;
+    return _KeyframePlan(
+      total,
+      [for (final d in specified) (d ?? 0.0) * k],
+      [for (final d in delays) d * k],
+    );
   }
 
   static const _reservedKeys = {
@@ -187,74 +288,47 @@ class SupremeTween extends SupremeAnimation {
     'modifiers',
     'keyframes',
     'stagger',
+    'immediateRender',
   };
 
-  void _setupKeyframes() {
+  void _setupKeyframes(double? explicitTotal, double base) {
     if (vars['keyframes'] is! List) return;
-    final kfList = vars['keyframes'] as List;
+    final kfList = (vars['keyframes'] as List).whereType<Map>().toList();
     if (kfList.isEmpty) return;
 
-    double totalDur = 0.0;
-    for (final kf in kfList) {
-      if (kf is Map) {
-        totalDur += (kf['duration'] as num?)?.toDouble() ?? 1.0;
-      }
-    }
+    final plan = _planKeyframes(kfList, explicitTotal, base);
+    final total = plan.total;
+    final n = kfList.length;
 
     _keyframeSteps = [];
-    for (final kf in kfList) {
-      if (kf is Map) {
-        final d = (kf['duration'] as num?)?.toDouble() ?? 1.0;
-        final frac = totalDur > 0 ? (d / totalDur) : (1.0 / kfList.length);
-        final kfEase = kf['ease'] is Ease
-            ? kf['ease'] as Ease
-            : (kf['ease'] is String
-                ? Ease.fromString(kf['ease'] as String)
-                : null);
+    for (var i = 0; i < n; i++) {
+      final kf = kfList[i];
+      final frac = total > 0 ? plan.durations[i] / total : 1.0 / n;
+      final delayFrac = total > 0 ? plan.delays[i] / total : 0.0;
+      final kfEase = kf['ease'] is Ease
+          ? kf['ease'] as Ease
+          : (kf['ease'] is String
+              ? Ease.fromString(kf['ease'] as String)
+              : null);
 
-        final stepProps = <String, dynamic>{};
-        kf.forEach((k, v) {
-          if (!_reservedKeys.contains(k)) {
-            stepProps[k.toString()] = v;
-          }
-        });
+      final stepProps = <String, dynamic>{};
+      kf.forEach((k, v) {
+        if (!_reservedKeys.contains(k)) {
+          stepProps[k.toString()] = v;
+        }
+      });
 
-        _keyframeSteps!.add(KeyframeStep(
-          durationFraction: frac,
-          ease: kfEase,
-          props: stepProps,
-        ));
-      }
+      _keyframeSteps!.add(KeyframeStep(
+        durationFraction: frac,
+        delayFraction: delayFrac,
+        ease: kfEase,
+        props: stepProps,
+      ));
     }
   }
 
   void _initProps() {
     _props.clear();
-
-    if (type == TweenType.fromTo) {
-      final fv = fromVars ?? const {};
-      vars.forEach((k, endVal) {
-        if (!_reservedKeys.contains(k)) {
-          final startVal = fv[k] ?? _getTargetProp(k);
-          _props.add(_PropertyTween(
-            key: k,
-            targetValueRaw: endVal,
-            startValue: startVal,
-            endValue: (startVal is num)
-                ? PropertyInterpolation.resolveRelativeDouble(
-                    startVal.toDouble(), endVal)
-                : endVal,
-            modifier: _modifiers[k],
-          ));
-        }
-      });
-      _buildKeyframeSpans();
-      _initialized = true;
-      // If immediate render is desired for from/fromTo
-      render(0.0, suppressEvents: true);
-      return;
-    }
-
     vars.forEach((k, v) {
       if (!_reservedKeys.contains(k)) {
         _props.add(_PropertyTween(
@@ -265,20 +339,31 @@ class SupremeTween extends SupremeAnimation {
       }
     });
 
-    // If target has immediate state, initialize property start values now
-    _lazyInit();
-
-    if (type == TweenType.from || type == TweenType.set) {
-      // Set target immediately
+    // Start/end values are recorded lazily on the first render, except when
+    // a from/fromTo/set tween is asked to show its from-values right away.
+    if (_immediateRender) {
+      _lazyInit();
       render(0.0, suppressEvents: true);
     }
   }
 
+  /// Whether start/end values have been recorded.
+  bool get isInitialized => _initialized;
+
   void _lazyInit() {
     if (_initialized) return;
+    final fv = fromVars ?? const <String, dynamic>{};
     for (final pt in _props) {
-      final current = _getTargetProp(pt.key);
-      pt.initialize(current, type);
+      if (type == TweenType.fromTo) {
+        final startVal = fv[pt.key] ?? _getTargetProp(pt.key);
+        pt.startValue = startVal;
+        pt.endValue = (startVal is num)
+            ? PropertyInterpolation.resolveRelativeDouble(
+                startVal.toDouble(), pt.targetValueRaw)
+            : pt.targetValueRaw;
+      } else {
+        pt.initialize(_getTargetProp(pt.key), type);
+      }
     }
     _buildKeyframeSpans();
     _initialized = true;
@@ -294,14 +379,19 @@ class SupremeTween extends SupremeAnimation {
       return;
     }
 
-    final cursor = <String, dynamic>{};
+    // A fromTo tween starts its first keyframes from the from-values.
+    final cursor = <String, dynamic>{
+      if (type == TweenType.fromTo && fromVars != null)
+        for (final e in fromVars!.entries)
+          if (!_reservedKeys.contains(e.key)) e.key: e.value,
+    };
     final spans = <_KeyframeSpan>[];
     var accumulated = 0.0;
 
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
-      final start = accumulated;
-      var end = accumulated + step.durationFraction;
+      final start = accumulated + step.delayFraction;
+      var end = start + step.durationFraction;
       if (i == steps.length - 1) end = 1.0;
       accumulated = end;
 
@@ -380,16 +470,20 @@ class SupremeTween extends SupremeAnimation {
     }
   }
 
+  /// Forgets the recorded start values; they are recorded again on the
+  /// next render.
   @override
   void invalidate() {
     super.invalidate();
     _initialized = false;
-    _lazyInit();
   }
 
   @override
   void renderProgress(double rawProgress) {
     if (!_initialized) {
+      // Nothing to write until the delay is over; the values are recorded
+      // when the tween actually starts.
+      if (totalTime < delayVal) return;
       _lazyInit();
     }
 

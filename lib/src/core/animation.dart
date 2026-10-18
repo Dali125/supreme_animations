@@ -134,7 +134,10 @@ abstract class SupremeAnimation {
   double duration([double? value]) {
     if (value != null) {
       _duration = value < 0.0 ? 0.0 : value;
-      if (_duration.isFinite) {
+      // Only re-render something that has already been rendered. Rendering a
+      // fresh animation here would record start values (and, for timelines,
+      // render children) at build time instead of when playback reaches them.
+      if (_duration.isFinite && (_started || totalTime > 0.0)) {
         render(time, suppressEvents: true);
       }
     }

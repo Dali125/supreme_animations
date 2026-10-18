@@ -50,6 +50,24 @@ mixin SupremeStateMixin<T extends StatefulWidget> on State<T> {
     return supremeFrom(target, vars, duration: duration, delay: delay);
   }
 
+  /// Creates a Supreme `fromTo` tween tracked within this State's lifecycle.
+  dynamic supremeFromTo(dynamic target, Map<String, dynamic> fromVars,
+      Map<String, dynamic> toVars,
+      {double? duration, double? delay}) {
+    return _supremeContext.run((ctx) {
+      return supreme.fromTo(target, fromVars, toVars,
+          duration: duration, delay: delay);
+    });
+  }
+
+  /// Runs [fn] inside this State's context, so every animation it creates
+  /// (tweens, timelines, `TextPlugin` effects, ...) is killed on dispose.
+  ///
+  /// ```dart
+  /// supremeRun(() => TextPlugin.typewriter(caption, 'Hello'));
+  /// ```
+  R supremeRun<R>(R Function() fn) => _supremeContext.run((_) => fn());
+
   /// Creates a Supreme `timeline` tracked within this State's lifecycle.
   SupremeTimeline supremeTimeline([Map<String, dynamic> vars = const {}]) {
     return _supremeContext.run((ctx) {
