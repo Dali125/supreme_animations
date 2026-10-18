@@ -298,6 +298,61 @@ void main() {
     });
   });
 
+  group('Review follow-ups', () {
+    test('duration() re-renders a tween that rendered immediately', () {
+      final a = {'x': 5.0};
+      final t = SupremeTween(
+        target: a,
+        type: TweenType.from,
+        vars: {'x': 50.0},
+        duration: 1.0,
+        paused: true,
+      );
+      expect(a['x'], 50.0);
+      t.duration(0.0); // zero length: shows the end state, as in 1.0.0
+      expect(a['x'], 5.0);
+    });
+
+    test('duration() still does not render a fresh to() or timeline', () {
+      final a = {'x': 0.0};
+      final t = SupremeTween(
+          target: a, vars: {'x': 10.0}, duration: 1.0, paused: true);
+      t.duration(0.0);
+      a['x'] = 3.0;
+      t.seek(0.0);
+      expect(a['x'], 10.0); // start recorded at first render (3 -> 10, 0s)
+      final b = {'y': 0.0};
+      final tl = supreme.timeline({'paused': true});
+      tl.to(b, {'y': 1.0, 'duration': 1.0, 'ease': Ease.linear});
+      b['y'] = 0.5;
+      tl.seek(0.5);
+      expect(b['y'], closeTo(0.75, 1e-6));
+      tl.kill();
+    });
+
+    test('delayed immediateRender from/fromTo show their from-state at once',
+        () {
+      final a = {'x': 5.0};
+      final b = {'x': 5.0};
+      final c = {'x': 5.0};
+      final t1 = supreme.from(a, {'x': 50.0, 'delay': 1.0});
+      final t2 = supreme.fromTo(b, {'x': 100.0}, {'x': 200.0, 'delay': 1.0});
+      final tl = supreme.timeline({'paused': true});
+      tl.to({'y': 0.0}, {'y': 1.0, 'duration': 1.0});
+      tl.fromTo(
+          c, {'x': 70.0}, {'x': 80.0, 'delay': 0.5, 'immediateRender': true});
+      expect(a['x'], 50.0);
+      expect(b['x'], 100.0);
+      expect(c['x'], 70.0);
+      supreme.ticker.tick(0.5); // still inside the delay
+      expect(a['x'], 50.0);
+      expect(b['x'], 100.0);
+      t1.kill();
+      t2.kill();
+      tl.kill();
+    });
+  });
+
   group('Fix 4: fromTo with keyframes', () {
     test('from values are the start of the first keyframe', () {
       final target = {'x': 0.0};

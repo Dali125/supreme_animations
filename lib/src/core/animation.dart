@@ -30,6 +30,9 @@ abstract class SupremeAnimation {
   bool _killed = false;
   bool _started = false;
 
+  /// True once [render] has run, including suppressed (immediate) renders.
+  bool _hasRendered = false;
+
   int _repeatIteration = 0;
   int _lastNotifiedIteration = 0;
   bool _didComplete = false;
@@ -134,10 +137,11 @@ abstract class SupremeAnimation {
   double duration([double? value]) {
     if (value != null) {
       _duration = value < 0.0 ? 0.0 : value;
-      // Only re-render something that has already been rendered. Rendering a
-      // fresh animation here would record start values (and, for timelines,
-      // render children) at build time instead of when playback reaches them.
-      if (_duration.isFinite && (_started || totalTime > 0.0)) {
+      // Only re-render something that has already been rendered (including an
+      // immediateRender of from/fromTo/set). Rendering a fresh animation here
+      // would record start values (and, for timelines, render children) at
+      // build time instead of when playback reaches them.
+      if (_duration.isFinite && _hasRendered) {
         render(time, suppressEvents: true);
       }
     }
@@ -408,6 +412,7 @@ abstract class SupremeAnimation {
   /// Renders internal properties for current iteration [time].
   void render(double iterationTime, {bool suppressEvents = false}) {
     if (_killed) return;
+    _hasRendered = true;
 
     // Suppressed renders (from/set immediate placement) must not consume onStart.
     if (!_started &&
