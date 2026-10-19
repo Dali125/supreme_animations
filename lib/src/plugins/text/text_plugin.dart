@@ -1,11 +1,26 @@
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import '../../core/context.dart';
 import '../../core/supreme_core.dart';
 import '../../core/tween.dart';
 import '../../easing/ease.dart';
 
 /// Text animation helper in Supreme Animations (typewriter effect, scramble text).
+///
+/// Like `supreme.to()`, the tweens join the active [SupremeContext] (inside
+/// `supremeContext.run(...)` or the `SupremeStateMixin` helpers), so they are
+/// killed when the context reverts. Pass `paused: true` to place one in a
+/// timeline with `tl.add(...)` instead of playing it straight away.
 class TextPlugin {
+  static SupremeTween _register(SupremeTween tween) {
+    SupremeContextScope.current?.add(tween);
+    if (!tween.isPaused()) {
+      supreme.globalTimeline.add(tween);
+      supreme.ticker.wake();
+    }
+    return tween;
+  }
+
   static const String _defaultScrambleChars =
       'abcdefghijklmnopqrstuvwxyz0123456789!@#\$%^&*()';
 
@@ -17,6 +32,7 @@ class TextPlugin {
     double delay = 0.0,
     Ease? ease,
     VoidCallback? onComplete,
+    bool paused = false,
   }) {
     final tween = _CustomTextTween(
       target: target,
@@ -25,10 +41,9 @@ class TextPlugin {
       delay: delay,
       ease: ease ?? Ease.linear,
       onComplete: onComplete,
+      paused: paused,
     );
-    supreme.globalTimeline.add(tween);
-    supreme.ticker.wake();
-    return tween;
+    return _register(tween);
   }
 
   /// Scrambles random characters before resolving each character of [newText].
@@ -40,6 +55,7 @@ class TextPlugin {
     String chars = _defaultScrambleChars,
     Ease? ease,
     VoidCallback? onComplete,
+    bool paused = false,
   }) {
     final tween = _ScrambleTextTween(
       target: target,
@@ -49,10 +65,9 @@ class TextPlugin {
       delay: delay,
       ease: ease ?? Ease.linear,
       onComplete: onComplete,
+      paused: paused,
     );
-    supreme.globalTimeline.add(tween);
-    supreme.ticker.wake();
-    return tween;
+    return _register(tween);
   }
 }
 
@@ -66,6 +81,7 @@ class _CustomTextTween extends SupremeTween {
     super.delay,
     super.ease,
     super.onComplete,
+    super.paused,
   }) : super(
           vars: const {},
         );
@@ -91,6 +107,7 @@ class _ScrambleTextTween extends SupremeTween {
     super.delay,
     super.ease,
     super.onComplete,
+    super.paused,
   }) : super(
           vars: const {},
         );

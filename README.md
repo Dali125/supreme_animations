@@ -61,8 +61,8 @@ Experience smooth 60fps animations, timeline sequencing, and physics across Flut
 - **Comprehensive Easing Suite**:
   - Standard curves: `power1`, `power2`, `power3`, `power4`, `sine`, `expo`, `circ` with `.easeIn`, `.out`, `.inOut`
   - Configurable physics eases:
-    - `Ease.back.out(overshoot)`
-    - `Ease.elastic.out(amplitude, period)`
+    - `Ease.back.out` (default overshoot), `Ease.back(1.7)` or `Ease.back.customOut(1.7)` for a custom overshoot (`customIn` / `customInOut` too)
+    - `Ease.elastic.out`, or `Ease.elastic.customOut(amplitude: 1.0, period: 0.3)` (`customIn` / `customInOut` too)
     - `Ease.bounce.out`
     - `Ease.steps(count)`
   - `CubicBezier(x1, y1, x2, y2)` with Newton-Raphson solver
@@ -70,7 +70,7 @@ Experience smooth 60fps animations, timeline sequencing, and physics across Flut
   - `RoughEase` for electric flicker and earthquake jitter
   - `SlowMo` for slow-motion easing with optional yoyo
 
-- **Stagger Engine (`supreme.stagger` / `Stagger`)**:
+- **Stagger Engine (`'stagger'` vars / `Stagger`)**:
   - 1D staggers with `from`: `start`, `end`, `center`, `edges`, `random`, or specific index
   - 2D grid staggers `[rows, cols]` with Manhattan/Euclidean distance and axis constraints (`'x'`, `'y'`)
   - Distribute delays with an easing curve (`ease`)
@@ -96,7 +96,7 @@ Add `supreme_animations` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  supreme_animations: ^1.0.0
+  supreme_animations: ^1.1.0
 ```
 
 Import `supreme_animations.dart`:
@@ -126,10 +126,10 @@ supreme.to(props, {
 });
 
 // Bind to widget
-SupremeWidget(
+final card = SupremeWidget(
   transform: props,
   child: MyCard(),
-)
+);
 ```
 
 You can also use the strongly-typed `SupremeVars` and the widget extension:
@@ -250,13 +250,20 @@ final codeNotifier = ValueNotifier<String>('XXXXXXXX');
 TextPlugin.scramble(codeNotifier, 'SECRET_KEY', duration: 1.5);
 
 // SplitText staggered character reveal
-SplitTextWidget(
+final title = SplitTextWidget(
   text: 'HOLLYWOOD GRADE',
   type: SplitType.chars,
   stagger: 0.04,
   duration: 0.8,
   from: {'y': 50.0, 'opacity': 0.0},
-)
+);
+```
+
+Text tweens join the active context like any other tween, so inside a `State`
+with `SupremeStateMixin` they are killed on dispose:
+
+```dart
+supremeRun(() => TextPlugin.typewriter(titleNotifier, 'Hello!'));
 ```
 
 ### 7. MotionPath (Curved Splines with Auto-Rotation)
@@ -287,6 +294,100 @@ SupremeDraggable(
   child: FloatingActionCard(),
 )
 ```
+
+### 9. Easing
+
+```dart
+supreme.to(props, {'x': 100.0, 'ease': Ease.power2.inOut});
+supreme.to(props, {'x': 100.0, 'ease': Ease.back.out}); // default overshoot
+supreme.to(props, {'x': 100.0, 'ease': Ease.back(2.5)}); // custom overshoot
+supreme.to(props, {'x': 100.0, 'ease': Ease.back.customInOut(1.2)});
+supreme.to(props, {
+  'x': 100.0,
+  'ease': Ease.elastic.customOut(amplitude: 1.2, period: 0.4),
+});
+supreme.to(props, {'x': 100.0, 'ease': Ease.bounce.out});
+supreme.to(props, {'x': 100.0, 'ease': Ease.steps(5)});
+supreme.to(props, {'x': 100.0, 'ease': CubicBezier(0.68, -0.55, 0.27, 1.55)});
+supreme.to(props, {'x': 100.0, 'ease': RoughEase(points: 20, strength: 1.5)});
+supreme.to(props, {'x': 100.0, 'ease': SlowMo(linearRatio: 0.5, power: 0.7)});
+supreme.to(props, {'x': 100.0, 'ease': 'power3.out'}); // strings work too
+```
+
+### 10. Keyframes
+
+```dart
+supreme.to(props, {
+  'keyframes': [
+    {'y': -40.0, 'duration': 0.3, 'ease': Ease.power2.out},
+    {'y': 0.0, 'duration': 0.5, 'ease': Ease.bounce.out},
+    {'scale': 1.2, 'duration': 0.2, 'delay': 0.4}, // holds 0.4s first
+  ],
+}); // lasts 0.3 + 0.5 + 0.4 + 0.2 = 1.4s
+```
+
+Timing rules:
+
+- Without a total `duration`, the tween lasts the **sum of the step durations
+  plus step delays**. A step with no `duration` gets the default duration (0.5s,
+  or the timeline's `defaults` duration) divided by the number of steps, so a
+  list without any step durations keeps the old 0.5s total.
+- With a total `duration`, steps without a `duration` share whatever time the
+  timed steps leave over. If nothing is left over, every step and delay is
+  scaled to fit the total (the 1.0.0 behaviour).
+- In a timeline, `defaults: {'duration': ...}` never squashes keyframe steps.
+- `fromTo` with `keyframes` starts the first keyframe from the from-values.
+
+### 11. Start values and `immediateRender`
+
+- `to()` records its start values when it actually starts (after any delay),
+  not when it is created. Queuing several tweens on the same property in a
+  timeline therefore chains naturally:
+
+```dart
+final tl = supreme.timeline();
+tl.to(props, {'x': 100.0}).to(props, {'x': 0.0}); // 0 -> 100 -> 0
+```
+
+- `from()` / `fromTo()` show their from-values at once (`immediateRender`) when
+  they are created playing. Created with `paused: true`, or placed in a
+  timeline anywhere after time 0, they wait until the playhead reaches them.
+  `set()` in a timeline behaves the same way. Override it either way:
+
+```dart
+supreme.fromTo(props, {'opacity': 0.0}, {'opacity': 1.0, 'immediateRender': false});
+tl.from(props, {'y': 40.0, 'immediateRender': true}, 1.0);
+```
+
+### 12. Cleanup with `SupremeStateMixin`
+
+```dart
+class _PulseCardState extends State<PulseCard>
+    with SupremeStateMixin<PulseCard> {
+  final props = TransformProps();
+
+  @override
+  void initState() {
+    super.initState();
+    supremeTo(props, {'y': -6.0, 'repeat': -1, 'yoyo': true});
+  }
+
+  void celebrate() {
+    // Everything created inside supremeRun is killed on dispose.
+    supremeRun(() {
+      supreme.timeline().to(props, {'scale': 1.2}).to(props, {'scale': 1.0});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SupremeWidget(transform: props, child: const SizedBox());
+}
+```
+
+The context only holds live animations strongly; finished ones are dropped
+(or held weakly while your code still references them), so it does not grow
+over the life of a long-lived widget.
 
 ---
 
